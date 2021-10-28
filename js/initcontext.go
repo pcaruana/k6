@@ -99,6 +99,7 @@ func NewInitContext(
 		modules:           getJSModules(),
 		moduleVUImpl: &moduleVUImpl{
 			ctxPtr: ctxPtr, runtime: rt,
+			eventLoop: newEventLoop(),
 		},
 	}
 }
@@ -150,15 +151,17 @@ func (i *InitContext) Require(arg string) goja.Value {
 }
 
 type moduleVUImpl struct {
-	ctxPtr  *context.Context
-	initEnv *common.InitEnvironment
-	state   *lib.State
-	runtime *goja.Runtime
+	ctxPtr    *context.Context
+	initEnv   *common.InitEnvironment
+	state     *lib.State
+	runtime   *goja.Runtime
+	eventLoop *eventLoop
 }
 
 func newModuleVUImpl() *moduleVUImpl {
 	return &moduleVUImpl{
-		ctxPtr: new(context.Context),
+		ctxPtr:    new(context.Context),
+		eventLoop: newEventLoop(),
 	}
 }
 
@@ -177,6 +180,29 @@ func (m *moduleVUImpl) State() *lib.State {
 func (m *moduleVUImpl) Runtime() *goja.Runtime {
 	return m.runtime
 }
+
+func (m *moduleVUImpl) Reserve() func(func() error) {
+	return m.eventLoop.reserve()
+}
+
+/* This is here to illustrate how to use Reserve to get a promise to work with the event loop
+// TODO move this to a common function or remove before merging
+
+// MakeHandledPromise will create and promise and return it's resolve, reject methods as well wrapped in such a way that
+// it will block the eventloop from exiting before they are called even if the promise isn't resolved by the time the
+// current script ends executing
+func (m *moduleVUImpl) MakeHandledPromise() (*goja.Promise, func(interface{}), func(interface{})) {
+	reserved := m.eventLoop.reserve()
+	p, resolve, reject := m.runtime.NewPromise()
+	return p, func(i interface{}) {
+			// more stuff
+			reserved(func() { resolve(i) })
+		}, func(i interface{}) {
+			// more stuff
+			reserved(func() { reject(i) })
+		}
+}
+*/
 
 func toESModuleExports(exp modules.Exports) interface{} {
 	if exp.Named == nil {
