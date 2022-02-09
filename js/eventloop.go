@@ -24,7 +24,8 @@ type eventLoop struct {
 
 func newEventLoop() *eventLoop {
 	return &eventLoop{
-		wakeupCh: make(chan struct{}, 1),
+		wakeupCh:                 make(chan struct{}, 1),
+		pendingPromiseRejections: make(map[*goja.Promise]struct{}),
 	}
 }
 
@@ -72,23 +73,22 @@ func (e *eventLoop) initHelpers(ctx context.Context, rt *goja.Runtime) {
 	e.addSetTimeout(ctx, rt)
 }
 
+func (e *eventLoop) getQueue() (queue []func() error, reserved bool) {
+	e.lock.Lock()
+	queue = e.queue
+	e.queue = make([]func() error, 0, len(queue))
+	reserved = e.reservedCount != 0
+	e.lock.Unlock()
+	return
+}
+
 // start will run the event loop until it's empty and there are no reserved spots
 // or a queued function returns an error. The provided function will be the first thing executed.
 // After start returns the event loop should not be reused if an error was returend
 func (e *eventLoop) start(f func() error) error {
-	// TODO this block can be moved to newEventLoop if we are never going to reuse an event loop
-	e.lock.Lock()
-	e.reservedCount = 0
 	e.queue = []func() error{f}
-	e.pendingPromiseRejections = make(map[*goja.Promise]struct{}, len(e.pendingPromiseRejections))
-	e.lock.Unlock()
 	for {
-		// acquire the queue
-		e.lock.Lock()
-		queue := e.queue
-		e.queue = make([]func() error, 0, len(queue))
-		reserved := e.reservedCount != 0
-		e.lock.Unlock()
+		queue, reserved := e.getQueue()
 
 		if len(queue) == 0 {
 			if !reserved { // we have empty queue and nothing that reserved a spot
@@ -125,22 +125,11 @@ func (e *eventLoop) start(f func() error) error {
 // this exists so we can wait on all reserved so we know nothing is still doing work
 func (e *eventLoop) waitOnReserved() {
 	for {
-		// acquire the queue
-		e.lock.Lock()
-		queue := e.queue
-		e.queue = make([]func() error, 0, len(queue))
-		reserved := e.reservedCount != 0
-		e.lock.Unlock()
-
-		if len(queue) == 0 {
-			if !reserved { // we have empty queue and nothing that reserved a spot
-				return
-			}
-			<-e.wakeupCh // wait until the reserved is done
-			continue
+		_, reserved := e.getQueue()
+		if !reserved {
+			return
 		}
-
-		// don't actually do anything we just want to go through them
+		<-e.wakeupCh // wait until the reserved is done
 	}
 }
 
