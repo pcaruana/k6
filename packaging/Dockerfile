@@ -1,4 +1,4 @@
-FROM debian:buster-20210311
+FROM debian:buster
 
 LABEL maintainer="k6 Developers <developers@k6.io>"
 
